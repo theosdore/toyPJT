@@ -1,13 +1,47 @@
-import { useCallback, useEffect } from 'vue';
+import { ref, watchEffect, nextTick } from 'vue';
 
 interface IpcChannel {
   channel: string;
   args?: unknown[];
 }
 
-function waitForWindow(): Promise<{ ipcRenderer: any }> {
+export function useIpc<T>(channel: string, ...mappers: ((result: any) => T)[]): {
+  call: (...args: unknown[]) => Promise<T | undefined>;
+  handleAsStream?: (callback: (data: T) => void) => () => void;
+} {
+  const resolved = ref<T | undefined>(undefined);
+  let activeResolvers: Array<((value: T | undefined) => void)> = [];
+
+  function resolveValue(value: T | undefined) {
+    activeResolvers.forEach(r => r(value));
+    activeResolvers = [];
+    resolved.value = value;
+  }
+
+  const call = (...args: unknown[]): Promise<T | undefined> => {
+    return new Promise((resolve) => {
+      if (resolved.value !== undefined && args.length === 0) {
+        resolve(resolved.value as T);
+        return;
+      }
+      activeResolvers.push(resolve);
+    });
+  };
+
+  useIpc.handleAsStream = <T>(callback: (data: T) => void): (() => void) => {
+    let cancelled = false;
+
+    return () => {
+      cancelled = true;
+    };
+  };
+
+  return { call, handleAsStream };
+}
+
+export function waitForWindow(): Promise<{ ipcRenderer: any }> {
   return new Promise((resolve) => {
-    if (window && window.ipcRenderer) {
+    if (window?.ipcRenderer) {
       resolve({ ipcRenderer: window.ipcRenderer });
     } else {
       const check = setInterval(() => {
@@ -18,52 +52,4 @@ function waitForWindow(): Promise<{ ipcRenderer: any }> {
       }, 50);
     }
   });
-}
-
-export function useIpc<T>(channel: string, ...mappers: ((result: any) => T)[]): {
-  call: (...args: unknown[]) => Promise<T | undefined>;
-  handleAsStream?: (callback: (data: T) => void) => () => void;
-} {
-  const [resolver, promise] = useStatePromise<T>();
-  const { call } = useCallback(
-    (...args: unknown[]): Promise<T | undefined> => {
-      waitForWindow().then(async ({ ipcRenderer }) => {
-        try {
-          const result = await ipcRenderer.invoke(channel, ...args);
-          return mappers.length > 0 ? mappers[0](result) : result as T;
-        } catch (err) {
-          console.error(`IPC ${channel} failed:`, err);
-          return undefined;
-        }
-      });
-      return promise;
-    },
-    [channel, promise, ...mappers]
-  );
-
-  useIpc.handleAsStream = useCallback(
-    (callback: (data: T) => void): (() => void) => {
-      let cancelled = false;
-      const unsub = channel === 'files-ready'
-        ? window.ipcRenderer!.on('files-loaded', (_event, data: any) => {
-            if (!cancelled) callback(mappers[0](data));
-          })
-        : null;
-      return () => {
-        cancelled = true;
-        unsub?.off();
-      };
-    },
-    [channel, mappers[0]]
-  );
-
-  return { call, handleAsStream };
-}
-
-function useStatePromise<T>(): [T | undefined, Promise<T>] {
-  const [state, setState] = React.useState<T | undefined>();
-  const p = new Promise<T>((resolve) => {
-    setState.resolve = resolve;
-  });
-  return [state, p];
 }

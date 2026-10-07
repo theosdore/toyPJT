@@ -30,13 +30,23 @@ import { useIpc } from './hooks/useIpc';
 
 const store = useAppStore();
 const { call: ipcSelectFolder } = useIpc('select-folder');
+const { call: ipcLoadFiles } = useIpc('load-files');
 
-function triggerFolderPick() {
-  ipcSelectFolder().then((path) => {
-    if (path?.ok && path.path) {
-      store.setFolder(path.path);
+async function triggerFolderPick() {
+  const result = await ipcSelectFolder();
+  if (result?.ok && result.path) {
+    store.setFolder(result.path);
+    await loadFilesForFolder(result.path);
+  }
+}
+
+async function loadFilesForFolder(folderPath: string) {
+  try {
+    const resp = await ipcLoadFiles(folderPath);
+    if (resp?.ok && resp.files?.length) {
+      store.setFiles(resp.files);
     }
-  });
+  } catch {}
 }
 </script>
 

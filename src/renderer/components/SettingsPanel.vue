@@ -53,7 +53,7 @@
         <input type="checkbox" v-model="settings.ops.titleCase" /> Title Case
       </label>
       <label class="toggle-row">
-        <input type="checkbox" v-model="settings.trimWhitespace" /> Trim Whitespace
+        <input type="checkbox" v-model="settings.ops.trimWhitespace" /> Trim Whitespace
       </label>
       <label class="toggle-row">
         <input type="checkbox" v-model="settings.ops.spaceToUnderscore" /> Space → _
@@ -62,16 +62,16 @@
       <input v-model="settings.ops.replaceWith[0]?.find" placeholder="Find text" style="margin-top:4px" />
       <input v-model="settings.ops.replaceWith[0]?.replace" placeholder="Replace with" />
       <label class="toggle-row">
-        <input type="checkbox" v-model="settings.prefix !== undefined" /> Add Prefix <input v-model="settings.prefix" placeholder="prefix" style="width:100px" />
+        <input type="checkbox" :model-value="settings.prefix !== undefined" /> Add Prefix <input v-model="settings.prefix" placeholder="prefix" style="width:100px" />
       </label>
       <label class="toggle-row">
-        <input type="checkbox" v-model="settings.suffix !== undefined" /> Add Suffix <input v-model="settings.suffix" placeholder="suffix" style="width:100px" />
+        <input type="checkbox" :model-value="settings.suffix !== undefined" /> Add Suffix <input v-model="settings.suffix" placeholder="suffix" style="width:100px" />
       </label>
       <label class="toggle-row">
-        <input type="checkbox" v-model="settings.deleteText !== undefined" /> Delete Text <input v-model="settings.deleteText" placeholder="text to delete" style="width:100px" />
+        <input type="checkbox" :model-value="settings.deleteText !== undefined" /> Delete Text <input v-model="settings.deleteText" placeholder="text to delete" style="width:100px" />
       </label>
       <label class="toggle-row">
-        <input type="checkbox" v-model="changeExtension !== undefined" /> Change Ext <input v-model="changeExtension" placeholder=".jpg" style="width:100px" />
+        <input type="checkbox" :model-value="changeExtension !== undefined" /> Change Ext <input v-model="changeExtension" placeholder=".jpg" style="width:100px" />
       </label>
     </div>
     <div class="action-row">
@@ -82,10 +82,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, watch, defineEmits } from 'vue';
+import { ref, reactive, watch } from 'vue';
 import { useAppStore } from '../state/store';
 
-const emit = defineEmits(['generate', 'execute']);
+const emit = defineEmits(['generate']);
 const store = useAppStore();
 
 const defaultSettings = {
@@ -110,12 +110,47 @@ watch(() => settings.ops.replaceWith, () => {
   }
 }, { deep: true });
 
-function emitGenerate() {
-  emit('generate', { ...settings });
+function getCheckedRenames(): Array<{ source: string; dest: string }> {
+  const checkedResultNames = new Map<number, string>();
+  for (const idx of store.checkedIndices) {
+    if (idx < store.currentResults.length) {
+      checkedResultNames.set(idx, store.currentResults[idx].newName);
+    }
+  }
+  return store.allFiles
+    .filter((f: any, i: number) => store.checkedIndices.has(i))
+    .map((f: any, i: number) => ({
+      source: f.originalPath,
+      dest: checkedResultNames.get(i) ?? '',
+    }));
 }
 
-function emitExecute() {
-  emit('execute');
+async function emitGenerate() {
+  emit('generate', {
+    ...settings,
+    folderPath: store.folderPath || '',
+    fileList: store.allFiles.map((f: any) => ({ originalName: f.originalName, ext: f.ext || '' })),
+  });
+}
+
+async function emitExecute() {
+  const entries = getCheckedRenames();
+  if (entries.length === 0) return;
+
+  try {
+    const reply = await windowIpc.executeRename(entries);
+
+    store.addPendingOp({
+      id: Date.now(),
+      label: `${reply.successCount}/${reply.total} files renamed`,
+    });
+
+    if (reply.ok && reply.failures.length > 0) {
+      alert(`Renamed ${reply.successCount} files.\n${reply.failures.map(f => `  - ${f.source}: ${f.error}`).join('\n')}`);
+    }
+  } catch (err) {
+    alert(`Rename failed: ${String(err)}`);
+  }
 }
 </script>
 
@@ -135,12 +170,7 @@ button { cursor: pointer; border: none; }
 .toggle-row { display: flex; align-items: center; gap: 8px; cursor: pointer; color: #a6adc8; }
 .toggle-row input[type="checkbox"] { accent-color: #89b4fa; }
 .extension-list .ext-chips { display: flex; flex-wrap: wrap; gap: 4px; }
-.chip {
-  background: #45475a;
-  padding: 2px 8px;
-  border-radius: 10px;
-  font-size: 11px;
-}
+.chip { background: #45475a; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
 .action-row { display: flex; gap: 8px; margin-top: 8px; }
 button.primary { background: #a6e3a1; color: #1e1e2e; }
 button:disabled { opacity: 0.4; cursor: not-allowed; }
