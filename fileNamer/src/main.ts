@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, dialog, Tray, nativeImage } from 'electron';
+import { app, BrowserWindow, ipcMain, dialog } from 'electron';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import { setupIPC, registerHandlers, validateChannel, CHANNELS } from './src/ipc/index';
@@ -93,29 +93,17 @@ async function handleLoadFiles(folderPath: string): Promise<LoadFilesReply> {
   }
 }
 
-function buildGroupLabel(entry: { extractDate: Date | null; originalName: string; ext: string }, mode: GroupingMode, pat: string | undefined): string {
-  switch (mode) {
-    case 'all':
-      return 'All Files';
-    case 'day': {
-      const d = entry.extractDate || new Date(entry.originalName);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    }
-    case 'no-date':
-      return entry.extractDate ? 'Has Date' : 'No Date';
-    case 'pattern':
-      return entry.originalName.toLowerCase().includes(pat?.toLowerCase())
-        ? pat || 'matched'
-        : 'unmatched';
-    case 'prefix':
-      return entry.originalName.slice(0, 3);
-    case 'byExt':
-      return `ext-${(entry.originalName.split('.').pop() ?? 'unknown').toLowerCase()}`;
-    case 'creation':
-      return 'Creation Order';
-    default:
-      return 'Other';
+interface FolderDropPayload {
+  folderPath: string;
+}
+
+async function handleFolderDrop(_event: any, _payload: unknown): Promise<{ ok: boolean; path: string | null; error?: string }> {
+  const payload = _payload as FolderDropPayload;
+  const folderPath = payload?.folderPath;
+  if (!folderPath || !fs.existsSync(folderPath)) {
+    return { ok: false, path: null, error: 'Invalid folder path' };
   }
+  return { ok: true, path: folderPath };
 }
 
 async function handleGenerateNames(payload: unknown): Promise<GenerateNamesReply> {
@@ -250,19 +238,56 @@ async function handleExecuteRename(payload: unknown): Promise<ExecuteRenameReply
   }
 }
 
-async function handleDropLoad(paths: string[]): Promise<{
-  ok: boolean;
-  files: Array<{ originalName: string; originalPath: string }>;
-  error?: string;
-}> {
-  const results: Array<{ originalName: string; originalPath: string }> = [];
-  for (const p of paths) {
-    try {
-      const dirs = fs.readdirSync(p, { withFileTypes: true }).filter((e: any) => e.isFile());
-      dirs.forEach((d: any) => results.push({ originalName: d.name, originalPath: path.join(p, d.name) }));
-    } catch {}
+async function handleCancelOp(): Promise<{ ok: boolean }> {
+  return { ok: true };
+}
+
+interface StateExportPayload {
+  settings: Record<string, unknown>;
+  files: Array<{ originalName: string; originalPath: string; ext: string; baseWithoutExt: string }>;
+}
+
+async function handleExportState(_event: any, payload: unknown): Promise<{ ok: boolean; json: string; error?: string }> {
+  const settings = payload as StateExportPayload;
+  try {
+    const data: Record<string, unknown> = {
+      ...settings.settings,
+      version: 1,
+      exportTime: new Date().toISOString(),
+      files: settings.files.map((f: any) => ({
+        originalName: f.originalName,
+        originalPath: f.originalPath,
+        ext: f.ext,
+        baseWithoutExt: f.baseWithoutExt,
+      })),
+    };
+    return { ok: true, json: Buffer.from(JSON.stringify(data, null, 2)).toString('base64') };
+  } catch (err) {
+    return { ok: false, error: String(err), json: '' };
   }
-  return { ok: true, files: results };
+}
+
+interface StateImportPayload {
+  json: string;
+}
+
+async function handleImportState(_event: any, payload: unknown): Promise<{ ok: boolean; settings: Record<string, unknown>; files: Array<{ originalName: string; originalPath: string }>; error?: string }> {
+  try {
+    const data = payload as StateImportPayload;
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(Buffer.from(data.json, 'base64').toString('utf-8'));
+    } catch {
+      return { ok: false, error: 'Failed to parse imported state.', settings: {}, files: [], error: 'Invalid JSON format.' };
+    }
+    const files = (parsed.files ?? []).map((f: any) => ({
+      originalName: f.originalName,
+      originalPath: f.originalPath,
+    }));
+    return { ok: true, settings: parsed.settings ?? {}, files };
+  } catch (err) {
+    return { ok: false, error: String(err), settings: {}, files: [], error: 'Import failed.' };
+  }
 }
 
 registerHandlers({
@@ -270,8 +295,11 @@ registerHandlers({
   'load-files': handleLoadFiles,
   'generate-names': handleGenerateNames,
   'execute-rename': handleExecuteRename,
+  'cancel-op': handleCancelOp,
   'drop-load': handleDropLoad,
-  'cancel-op': async () => ({ ok: true }),
+  'export-state': handleExportState,
+  'import-state': handleImportState,
+  'folder-drop': handleFolderDrop,
 });
 
 app.whenReady().then(() => {
@@ -294,6 +322,21 @@ app.whenReady().then(() => {
   win.loadURL('data:text/html;base64,' + Buffer.from('<html></html>').toString('base64'));
 
   win.on('closed', () => { win.destroy(); });
+
+  win.addEventListener('drop', async (_e: Event) => {
+    _e.preventDefault();
+    const names = _e.parameters?.files?.map((fn: Electron.FileItem) => fn.path) ?? [];
+    if (names.length > 0) {
+      try {
+        const dirs = fs.readdirSync(path.dirname(names[0]), { withFileTypes: true })
+          .filter(d => d.isDirectory())
+          .map(d => path.dirname(names[0]) + '\' + d.name);
+        if (dirs.length > 0) {
+          win.ipcRenderer.send('folder-drop', { folderPath: dirs[0] });
+        }
+      } catch {}
+    }
+  });
 
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit();

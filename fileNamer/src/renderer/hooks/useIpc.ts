@@ -1,20 +1,13 @@
-import { ref, watchEffect, nextTick } from 'vue';
-
-interface IpcChannel {
-  channel: string;
-  args?: unknown[];
-}
+import { ref, watchEffect } from 'vue';
 
 export function useIpc<T>(channel: string, ...mappers: ((result: any) => T)[]): {
   call: (...args: unknown[]) => Promise<T | undefined>;
-  handleAsStream?: (callback: (data: T) => void) => () => void;
+  invoke: <U>(...args: unknown[]) => Promise<U>;
+  handleAsStream?: (callback: (data: T) => void): (() => void);
 } {
   const resolved = ref<T | undefined>(undefined);
-  let activeResolvers: Array<((value: T | undefined) => void)> = [];
 
   function resolveValue(value: T | undefined) {
-    activeResolvers.forEach(r => r(value));
-    activeResolvers = [];
     resolved.value = value;
   }
 
@@ -24,19 +17,32 @@ export function useIpc<T>(channel: string, ...mappers: ((result: any) => T)[]): 
         resolve(resolved.value as T);
         return;
       }
-      activeResolvers.push(resolve);
+      resolve(undefined);
     });
+  };
+
+  const invoke = async <U>(...args: unknown[]): Promise<U> => {
+    try {
+      const result = await windowIpc(channel, ...args);
+      return result as U;
+    } catch {
+      return undefined as U;
+    }
   };
 
   useIpc.handleAsStream = <T>(callback: (data: T) => void): (() => void) => {
     let cancelled = false;
 
-    return () => {
+    const stop = () => {
       cancelled = true;
     };
+
+    windowIpc(`${channel}:stream`, callback);
+
+    return stop;
   };
 
-  return { call, handleAsStream };
+  return { call, invoke, handleAsStream };
 }
 
 export function waitForWindow(): Promise<{ ipcRenderer: any }> {
@@ -49,7 +55,16 @@ export function waitForWindow(): Promise<{ ipcRenderer: any }> {
           clearInterval(check);
           resolve({ ipcRenderer: window.ipcRenderer });
         }
-      }, 50);
+      }, 200);
     }
   });
+}
+
+const channelCacheMap = new Map<string, Function[]>();
+
+export function trackChannel(channel: string, resolver: (value: any) => void): void {
+  if (!channelCacheMap.has(channel)) {
+    channelCacheMap.set(channel, []);
+  }
+  channelCacheMap.get(channel)!.push(resolver);
 }

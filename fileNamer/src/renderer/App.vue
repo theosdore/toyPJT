@@ -27,10 +27,15 @@ import SettingsPanel from './components/SettingsPanel.vue';
 import DiffTable from './components/DiffTable.vue';
 import ToastContainer from './components/ToastContainer.vue';
 import { useIpc } from './hooks/useIpc';
+import { onMounted, onUnmounted } from 'vue';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 
 const store = useAppStore();
 const { call: ipcSelectFolder } = useIpc('select-folder');
-const { call: ipcLoadFiles } = useIpc('load-files');
+const { invoke: ipcLoadFiles } = useIpc('load-files');
+
+let dirs: string[] = [];
 
 async function triggerFolderPick() {
   const result = await ipcSelectFolder();
@@ -48,6 +53,34 @@ async function loadFilesForFolder(folderPath: string) {
     }
   } catch {}
 }
+
+let dndListener: (e: DragEvent) => void;
+
+function handleDrop(e: DragEvent) {
+  e.preventDefault();
+  e.stopPropagation();
+  const items = e.dataTransfer?.files;
+  if (items && items.length > 0) {
+    try {
+      const root = path.dirname(items[0].path);
+      dirs = fs.readdirSync(root, { withFileTypes: true }).filter(d => d.isDirectory()).map(d => path.join(root, d.name));
+      if (dirs.length > 0) {
+        windowIpc.send('folder-drop', { folderPath: dirs[0] });
+      }
+    } catch {}
+  }
+}
+
+onMounted(() => {
+  dndListener = handleDrop;
+  document.addEventListener('dragover', handleDrop);
+  document.addEventListener('drop', handleDrop);
+});
+
+onUnmounted(() => {
+  document.removeEventListener('dragover', dndListener);
+  document.removeEventListener('drop', dndListener);
+});
 </script>
 
 <style scoped>

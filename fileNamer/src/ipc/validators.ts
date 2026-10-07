@@ -5,6 +5,9 @@ export const CHANNELS = {
   EXECUTE_RENAME: 'execute-rename',
   DROP_LOAD: 'drop-load',
   CANCEL_OP: 'cancel-op',
+  FOLDER_DROP: 'folder-drop',
+  EXPORT_STATE: 'export-state',
+  IMPORT_STATE: 'import-state',
 } as const;
 
 type ChannelName = (typeof CHANNELS)[keyof typeof CHANNELS];
@@ -69,12 +72,40 @@ export interface DropLoadReply {
   error?: string;
 }
 
+export interface FolderDropPayload {
+  folderPath: string;
+}
+
+export interface ExportStateReply {
+  ok: boolean;
+  json: string;
+  error?: string;
+}
+
+export interface ImportStatePayload {
+  json: string;
+}
+
+export interface ImportStateReply {
+  ok: boolean;
+  settings: Record<string, unknown>;
+  files: Array<{
+    originalName: string;
+    originalPath: string;
+  }>;
+  error?: string;
+}
+
 export type IpchdlreType =
   | { type: 'select-folder'; reply: SelectFolderReply }
   | { type: 'load-files'; reply: LoadFilesReply }
   | { type: 'generate-names'; reply: GenerateNamesReply }
   | { type: 'execute-rename'; reply: ExecuteRenameReply }
-  | { type: 'drop-load'; reply: DropLoadReply };
+  | { type: 'drop-load'; reply: DropLoadReply }
+  | { type: 'folder-drop'; reply: { ok: boolean; path: string | null; error?: string } }
+  | { type: 'cancel-op'; reply: { ok: boolean } }
+  | { type: 'export-state'; reply: ExportStateReply }
+  | { type: 'import-state'; reply: ImportStateReply };
 
 declare global {
   interface Window {
